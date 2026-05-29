@@ -9,14 +9,20 @@ Contains Collection Class, Dataset Class, and one wrapper function for
 downloading the datasets.
 '''
 
+import requests, os, json
 import pandas as pd
-import requests
-import os
-import json
+
 from typing import Optional, List, Dict, Tuple, TypeVar
+from dotenv import dotenv_values
+
 import src.config as CFG
 
+
+get_api_key = dotenv_values(".env")
+headers = { "x-api-key": get_api_key["API_KEY"] }
 pdDF = TypeVar('pandas.core.frame.DataFrame')
+
+
 
 class Collection:
     def __init__(self, collection_id: str) -> Tuple[str, str, List[str]]:
@@ -42,8 +48,7 @@ class Collection:
         self.dataset_id_list = None
         
         self.collection_info()
-        
-        
+                
     def collection_info(self) -> Tuple[str, str, List[str]]:
         '''
         Returns
@@ -52,7 +57,7 @@ class Collection:
             returns the collection name, last updated date, and a list of datasetID
 
         '''
-        json_content = requests.get(self.col_url_info).json()
+        json_content = requests.get(url = self.col_url_info, headers = headers).json()
         content = json_content['data']['collectionMetadata']
         
         self.collection_name = content['name']
@@ -63,8 +68,7 @@ class Collection:
     
 
 class Dataset:
-    def __init__(self, dataset_id: str, pdf: str = 'No', csv: str = 'No',\
-                 csvdir: Optional[str] = None):
+    def __init__(self, dataset_id: str, pdf: str = 'No', csv: str = 'No', csvdir: Optional[str] = None):
         '''
         Parameters
         ----------
@@ -103,7 +107,6 @@ class Dataset:
             
         if csv == 'Yes':
             self.dataset_download_csv(directory=csvdir)
-
         
     def dataset_info(self) -> Tuple[str, str, Dict[str,List[str]]]:
         '''
@@ -114,7 +117,13 @@ class Dataset:
             The dict will contain mapping_id, name, datatype, description, index,
             as the keys.
         '''       
-        json_content = requests.get(self.url_info).json()
+        json_content = requests.get(url = self.url_info, headers = headers).json()
+        
+        output_txt = json.dumps( json.loads( json_content.text ) )
+        # write the response to an output file
+        with open("test.json", "w") as f:
+            f.write(output_txt)
+        
         content = json_content['data']
         content_inner = json_content['data']['columnMetadata']
         
@@ -202,31 +211,47 @@ class Dataset:
             pd.DataFrame that contains everything
         '''
         print(f"Downloading from {self.url_download}")
-        ini_json_content = requests.get(self.url_download).json()
+        ini_json_content = requests.get(url = self.url_download, headers = headers).json()
         
         self.total_results = ini_json_content['result']['total']
         print(f'There are a total of {self.total_results} rows in this dataset')
         
-        offset_start, offset_end, limit = self.dataset_download_counter()
-        for x in range(offset_start, offset_end, limit):
-            if x == 0:
-                offset_limit_str = f"&limit={limit}"
-            elif x > 0:
-                offset_limit_str = f"&offset={x}&limit={limit}"
-            loop_url = self.url_download + offset_limit_str
-            loop_json_content = requests.get(loop_url).json()
-            loop_record = loop_json_content['result']['records']
-            loop_record_df = pd.DataFrame(loop_record)
-            if x == offset_start:
-                overall_loop_record_df = loop_record_df
-            else:
-                overall_loop_record_df = pd.concat([overall_loop_record_df, loop_record_df], axis=0, ignore_index=True)
-            if x > (offset_end-limit):
-                print(f"Processed {self.total_results} / {self.total_results} rows.")
-            else:
-                print(f"Processed {x+limit} / {self.total_results} rows.")
+        if self.total_results <= 1000:
+            # dataset_download_counter() returns None for offset_end and limit if self.total_results < 1000
+            # and this causes some kind of error with range() because it can't interpret NoneType as an int 
+            # or at least, it doesn't anymore
+            # so I'm putting this bit in as a workaround
+            
+            _url = self.url_download
+            _json_content = requests.get(url = _url, headers = headers).json()
+            _record = _json_content['result']['records']
+            _record_df = pd.DataFrame(_record)
+            
+            print(f"Processed {self.total_results} / {self.total_results} rows.")
+            self.dataframe_data = _record_df
+            
+        else: 
+            offset_start, offset_end, limit = self.dataset_download_counter()
+            
+            for x in range(offset_start, offset_end, limit):
+                if x == 0:
+                    offset_limit_str = f"&limit={limit}"
+                elif x > 0:
+                    offset_limit_str = f"&offset={x}&limit={limit}"
+                loop_url = self.url_download + offset_limit_str
+                loop_json_content = requests.get(url = loop_url, headers = headers).json()
+                loop_record = loop_json_content['result']['records']
+                loop_record_df = pd.DataFrame(loop_record)
+                if x == offset_start:
+                    overall_loop_record_df = loop_record_df
+                else:
+                    overall_loop_record_df = pd.concat([overall_loop_record_df, loop_record_df], axis=0, ignore_index=True)
+                if x > (offset_end-limit):
+                    print(f"Processed {self.total_results} / {self.total_results} rows.")
+                else:
+                    print(f"Processed {x+limit} / {self.total_results} rows.")
                 
-        self.dataframe_data = overall_loop_record_df
+            self.dataframe_data = overall_loop_record_df
             
         return self.dataframe_data
     
@@ -424,6 +449,3 @@ def download_collection(collection_id: str, chk: str = 'No', combcsv: str = 'No'
     return combinedpdf
         
 
-
-
-    
